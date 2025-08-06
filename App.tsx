@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
-import { SimpleAIGenerator } from './src/generators/simple-generator';
+import { AIAppGenerator } from './src/generators/ai-generator-final';
 import { apiService } from './src/services/api';
 
 // Simplified - only one generator now
@@ -49,7 +49,7 @@ function App(): JSX.Element {
 
   // Simplified generator creation
   const createGenerator = () => {
-    return new SimpleAIGenerator();
+    return new AIAppGenerator();
   };
 
   useEffect(() => {
