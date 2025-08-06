@@ -10,9 +10,14 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
-import { DynamicAIAppGenerator } from './src/generators/ai-generator-dynamic';
+import { SimpleAIGenerator } from './src/generators/simple-generator';
 import { apiService } from './src/services/api';
-import componentRegistry from './src/registry/components-registry.json';
+
+// Simplified - only one generator now
+const FEATURE_FLAGS = {
+  GENERATOR_TYPE: 'simple' as const,
+  ENABLE_GENERATOR_SWITCHING: false, // Simplified to single generator
+};
 
 // Import local versions as fallback
 import Header from './src/components/Header';
@@ -40,6 +45,12 @@ function App(): JSX.Element {
   const [components, setComponents] = useState<any>({});
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [apiStatus, setApiStatus] = useState<'checking' | 'online' | 'offline'>('checking');
+  const [generatorType] = useState(FEATURE_FLAGS.GENERATOR_TYPE);
+
+  // Simplified generator creation
+  const createGenerator = () => {
+    return new SimpleAIGenerator();
+  };
 
   useEffect(() => {
     // Check API status
@@ -62,7 +73,7 @@ function App(): JSX.Element {
       setPrompt('Create a todo list app');
       setTimeout(() => {
         const demoGenerate = async () => {
-          const generator = new DynamicAIAppGenerator();
+          const generator = createGenerator();
           const appSpec = await generator.generateApp('Create a todo list app');
           
           if (appSpec.enableDatabase) {
@@ -94,7 +105,7 @@ function App(): JSX.Element {
     setLoading(true);
     try {
       // Step 1: Generate app specification using AI
-      const generator = new DynamicAIAppGenerator();
+      const generator = createGenerator();
       const appSpec = await generator.generateApp(prompt);
       
       console.log('Generated App Spec:', appSpec);
@@ -188,6 +199,7 @@ function App(): JSX.Element {
         <Text style={styles.title}>AI App Generator</Text>
         <Text style={styles.subtitle}>Describe your app and watch it generate!</Text>
       </View>
+
 
       <View style={styles.inputContainer}>
         <TextInput
@@ -351,6 +363,51 @@ const styles = StyleSheet.create({
   statusText: {
     fontSize: 12,
     color: '#666',
+  },
+  generatorSelector: {
+    backgroundColor: 'white',
+    margin: 16,
+    marginBottom: 0,
+    padding: 16,
+    borderRadius: 8,
+    elevation: 2,
+  },
+  selectorLabel: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 8,
+    color: '#333',
+  },
+  selectorRow: {
+    flexDirection: 'row',
+    marginBottom: 8,
+  },
+  selectorButton: {
+    flex: 1,
+    padding: 8,
+    marginHorizontal: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    backgroundColor: '#f9f9f9',
+    alignItems: 'center',
+  },
+  selectorButtonActive: {
+    backgroundColor: '#6200ee',
+    borderColor: '#6200ee',
+  },
+  selectorText: {
+    fontSize: 12,
+    color: '#666',
+  },
+  selectorTextActive: {
+    color: 'white',
+    fontWeight: 'bold',
+  },
+  generatorDescription: {
+    fontSize: 11,
+    color: '#888',
+    fontStyle: 'italic',
   },
 });
 
