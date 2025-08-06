@@ -1,4 +1,3 @@
-
 interface ComponentSpec {
   type: string;
   props: Record<string, any>;

@@ -1,0 +1,47 @@
+{
+  "timestamp": "2025-08-06T21:28:56.098Z",
+  "version": "1.0.0",
+  "results": [
+    {
+      "prompt": "Create a todo list app",
+      "type": "todo",
+      "appName": "Todo List App",
+      "screenCount": 1,
+      "componentCount": 3,
+      "hasDatabase": true,
+      "dataCollection": "todos"
+    },
+    {
+      "prompt": "Build a dashboard with analytics",
+      "type": "dashboard",
+      "appName": "Dashboard App",
+      "screenCount": 1,
+      "componentCount": 4,
+      "hasDatabase": false,
+      "dataCollection": null
+    },
+    {
+      "prompt": "Make a blog app",
+      "type": "blog",
+      "appName": "Blog App",
+      "screenCount": 1,
+      "componentCount": 3,
+      "hasDatabase": true,
+      "dataCollection": "posts"
+    },
+    {
+      "prompt": "Create a simple app",
+      "type": "default",
+      "appName": "Generated App",
+      "screenCount": 1,
+      "componentCount": 3,
+      "hasDatabase": false,
+      "dataCollection": null
+    }
+  ],
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0
+  }
+}

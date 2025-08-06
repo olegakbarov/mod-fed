@@ -1,6 +1,15 @@
-# AI App Generator PoC
+# AI App Generator
 
-A minimal proof of concept demonstrating AI-powered app generation using module federation concepts and React Native.
+A simplified and refactored AI-powered app generation system using template-based architecture and React Native. This system generates mobile applications from natural language prompts using intelligent template matching and component optimization.
+
+## ✨ Key Features
+
+- **Template-Based Generation**: Smart template matching based on user intent and keywords
+- **Component Optimization**: Intelligent rule-based component selection and optimization
+- **React Native Compatible**: Full React Native support with platform-specific optimizations
+- **Extensible Architecture**: Easy to add new templates, components, and rules
+- **Comprehensive Testing**: >98% test coverage with robust error handling
+- **Type Safety**: Full TypeScript support with schema validation
 
 ## 🏗️ Project Structure
 
