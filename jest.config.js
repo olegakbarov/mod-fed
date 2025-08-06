@@ -27,18 +27,15 @@ module.exports = {
   coverageReporters: ['text', 'lcov', 'html'],
   coverageDirectory: 'coverage',
   testTimeout: 10000,
-  moduleNameMapping: {
+  moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
     '^@server/(.*)$': '<rootDir>/server/$1',
+    '^bun$': '<rootDir>/__mocks__/bun.js',
+    '^bun:sqlite$': '<rootDir>/__mocks__/bun-sqlite.js',
   },
   globals: {
     'ts-jest': {
       tsconfig: 'tsconfig.json',
     },
-  },
-  // Mock Bun-specific modules
-  moduleNameMapping: {
-    '^bun$': '<rootDir>/__mocks__/bun.js',
-    '^bun:sqlite$': '<rootDir>/__mocks__/bun-sqlite.js',
   },
 };

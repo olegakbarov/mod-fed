@@ -2,6 +2,27 @@
 
 A proof of concept demonstrating AI-powered app generation using module federation concepts and React Native. Now integrated with Vercel AI SDK for real AI-powered app generation using OpenAI or Anthropic.
 
+## 🎯 Solution Options
+
+This project offers two implementation approaches:
+
+### 🚀 Simple Solution (Recommended)
+**Location**: `/src/simple/`
+- **Ready for production** with comprehensive security and testing
+- Uses proven libraries (Express, JWT, Helmet, SQLite)
+- ~2,000 lines of code with extensive documentation
+- Complete authentication, rate limiting, and AI integration
+- **Best for**: Most applications, rapid development, standard requirements
+
+### ⚡ Complex Solution  
+**Location**: `/server/` and `/src/`
+- Advanced architecture with custom implementations
+- Production-ready with extensive monitoring and resilience features
+- ~8,000+ lines with sophisticated patterns
+- **Best for**: High-scale applications, custom requirements, dedicated teams
+
+**👉 New users should start with the Simple Solution** - see [Simple Solution Guide](/src/simple/README.md)
+
 ## 🏗️ Project Structure
 
 ```
@@ -61,7 +82,53 @@ AI_API_KEY=your-api-key-here
 AI_MODEL=gpt-4o-mini  # or claude-3-5-sonnet-20241022
 ```
 
-### Running the PoC
+## 🚀 Quick Start: Simple Solution
+
+**For most users - start here:**
+
+1. **Configure environment:**
+```bash
+cp .env.example .env
+# Edit .env with your AI API key and JWT secret
+```
+
+2. **Run the Simple API Server:**
+```bash
+cd /src/simple
+bun run app.ts
+# Server runs on http://localhost:3000
+```
+
+3. **Test the API:**
+```bash
+# Register a user
+curl -X POST http://localhost:3000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com","name":"Test User","password":"password123"}'
+
+# Generate an app
+curl -X POST http://localhost:3000/api/generate \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"Create a todo list app"}'
+```
+
+See the [Simple Solution Guide](/src/simple/README.md) for complete documentation.
+
+## 🎯 Choosing Your Solution
+
+| Feature | Simple Solution | Complex Solution |
+|---------|----------------|------------------|
+| **Setup Time** | 5 minutes | 30+ minutes |
+| **Code Complexity** | Low (~2k lines) | High (~8k+ lines) |
+| **Dependencies** | 8 proven libraries | 15+ libraries |
+| **Documentation** | Complete | Extensive |
+| **Security** | Production-ready | Advanced |
+| **Scalability** | Good (< 10k users) | Excellent |
+| **Maintenance** | Easy | Requires expertise |
+| **Best For** | Most applications | Enterprise/high-scale |
+
+### Running the Complex Solution (React Native PoC)
 
 1. **Terminal 1 - Start Component Server:**
 ```bash
