@@ -1,0 +1,51 @@
+{
+  "components": {
+    "Header": {
+      "id": "header-basic",
+      "url": "http://localhost:3001/Header.js",
+      "props": ["title", "showBack"],
+      "aiTags": ["navigation", "top", "header"],
+      "description": "Basic header with optional back button"
+    },
+    "Button": {
+      "id": "button-primary",
+      "url": "http://localhost:3001/Button.js",
+      "props": ["label", "onPress"],
+      "aiTags": ["action", "cta", "interactive"],
+      "description": "Primary action button"
+    },
+    "List": {
+      "id": "list-simple",
+      "url": "http://localhost:3001/List.js",
+      "props": ["items"],
+      "aiTags": ["display", "collection", "scrollable"],
+      "description": "Simple list for displaying collections"
+    },
+    "Card": {
+      "id": "card-basic",
+      "url": "http://localhost:3001/Card.js",
+      "props": ["title", "content", "image"],
+      "aiTags": ["container", "content", "display"],
+      "description": "Card container for content"
+    },
+    "TextInput": {
+      "id": "input-basic",
+      "url": "http://localhost:3001/TextInput.js",
+      "props": ["placeholder", "value", "onChangeText"],
+      "aiTags": ["input", "form", "interactive"],
+      "description": "Text input field"
+    }
+  },
+  "templates": {
+    "todo": {
+      "name": "Todo App",
+      "components": ["Header", "List", "TextInput", "Button"],
+      "layout": "vertical"
+    },
+    "dashboard": {
+      "name": "Dashboard",
+      "components": ["Header", "Card", "List"],
+      "layout": "grid"
+    }
+  }
+}
