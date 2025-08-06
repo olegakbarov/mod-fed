@@ -1,6 +1,7 @@
 import { serve } from "bun";
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
+import { AIAppGenerator } from "../src/generators/ai-generator";
 
 const PORT = 3002;
 const dbPath = join(process.cwd(), "app-data.db");
@@ -207,12 +208,42 @@ serve({
       }, { headers: corsHeaders });
     }
 
+    // AI Generate endpoint
+    if (path === "/api/generate" && method === "POST") {
+      const body = await parseBody(req);
+      if (!body || !body.prompt) {
+        return Response.json({ error: "Missing prompt" }, { status: 400, headers: corsHeaders });
+      }
+
+      try {
+        const generator = new AIAppGenerator();
+        const appSpec = await generator.generateApp(body.prompt);
+        
+        // Save generated app to database
+        const stmt = db.prepare("INSERT INTO apps (name, spec) VALUES (?, ?)");
+        const result = stmt.run(appSpec.appName, JSON.stringify(appSpec));
+        
+        const newApp = db.query("SELECT * FROM apps WHERE id = ?").get(result.lastInsertRowid);
+        return Response.json({ 
+          app: newApp,
+          spec: appSpec 
+        }, { headers: corsHeaders });
+      } catch (error) {
+        console.error("Generation error:", error);
+        return Response.json({ 
+          error: "Failed to generate app", 
+          details: error.message 
+        }, { status: 500, headers: corsHeaders });
+      }
+    }
+
     return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
   },
 });
 
 console.log(`API server running at http://localhost:${PORT}`);
 console.log("Available endpoints:");
+console.log(`  - POST   http://localhost:${PORT}/api/generate (AI-powered app generation)`);
 console.log(`  - GET    http://localhost:${PORT}/api/apps`);
 console.log(`  - POST   http://localhost:${PORT}/api/apps`);
 console.log(`  - GET    http://localhost:${PORT}/api/apps/:id`);

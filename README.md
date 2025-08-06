@@ -1,6 +1,6 @@
 # AI App Generator PoC
 
-A minimal proof of concept demonstrating AI-powered app generation using module federation concepts and React Native.
+A proof of concept demonstrating AI-powered app generation using module federation concepts and React Native. Now integrated with Vercel AI SDK for real AI-powered app generation using OpenAI or Anthropic.
 
 ## 🏗️ Project Structure
 
@@ -38,6 +38,7 @@ ai-app-generator-poc/
 - [Bun](https://bun.sh) installed
 - React Native development environment
 - iOS Simulator or Android Emulator
+- AI API Key (OpenAI or Anthropic) - optional but recommended
 
 ### Installation
 
@@ -46,14 +47,33 @@ cd ai-app-generator-poc
 bun install
 ```
 
+### AI Configuration
+
+1. Copy `.env.example` to `.env`:
+```bash
+cp .env.example .env
+```
+
+2. Add your AI provider API key:
+```env
+AI_PROVIDER=openai  # or 'anthropic'
+AI_API_KEY=your-api-key-here
+AI_MODEL=gpt-4o-mini  # or claude-3-5-sonnet-20241022
+```
+
 ### Running the PoC
 
 1. **Terminal 1 - Start Component Server:**
 ```bash
-bun run component-server
+bun run server/component-server.ts
 ```
 
-2. **Terminal 2 - Run React Native App:**
+2. **Terminal 2 - Start API Server (with AI):**
+```bash
+bun run server/api-server.ts
+```
+
+3. **Terminal 3 - Run React Native App:**
 ```bash
 npx react-native run-ios
 # OR
@@ -63,8 +83,8 @@ npx react-native run-android
 ## 🎯 How It Works
 
 1. **User Input**: Enter a natural language description of your app
-2. **AI Generation**: The system analyzes keywords and generates an app specification
-3. **Component Selection**: Appropriate components are selected from the registry
+2. **AI Generation**: Uses Vercel AI SDK with OpenAI/Anthropic to generate app specifications
+3. **Component Selection**: AI selects appropriate components from the registry
 4. **Dynamic Loading**: Components are loaded (simulated module federation)
 5. **App Rendering**: The generated app is displayed in real-time
 
@@ -84,9 +104,10 @@ Try these in the app:
 - Local fallbacks for resilience
 
 ### AI Generation
-- Keyword-based matching for PoC
-- Ready for real AI API integration (Claude/GPT)
-- Component selection based on AI tags
+- **Real AI Integration**: Uses Vercel AI SDK with OpenAI or Anthropic
+- **Structured Output**: AI generates valid JSON app specifications
+- **Fallback Logic**: Keyword-based matching when API is unavailable
+- **Component selection based on AI analysis
 
 ### Component Registry
 - Metadata-driven component discovery
@@ -111,6 +132,13 @@ The component server runs on port 3001 and serves:
 - `/components` - List available components
 - `/{component}.js` - Individual component files
 
+### API Server
+The API server runs on port 3002 and provides:
+- `POST /api/generate` - AI-powered app generation
+- `GET/POST /api/apps` - App management
+- `GET/POST/PUT/DELETE /api/data/:collection` - Dynamic data storage
+- `GET /api/stats` - Usage statistics
+
 ## 🔄 Component Architecture
 
 ### Remote Components (`remote-components/`)
@@ -127,11 +155,10 @@ The component server runs on port 3001 and serves:
 
 ### Current Limitations (PoC)
 - Uses `eval()` for module loading (security risk - production should use proper federation)
-- Mock AI responses (no actual AI API calls)
 - Simulated server components (not real RSC)
 
 ### Future Enhancements
-1. Integrate real AI APIs (Claude/GPT)
+1. ~~Integrate real AI APIs (Claude/GPT)~~ ✅ Completed with Vercel AI SDK
 2. Implement proper Webpack Module Federation
 3. Add React Server Components when available for RN
 4. Expand component library

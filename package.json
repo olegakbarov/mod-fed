@@ -37,7 +37,11 @@
     "bun-types": "latest"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^2.0.1",
+    "@ai-sdk/openai": "^2.0.4",
+    "ai": "^5.0.5",
     "react": "18.2.0",
-    "react-native": "0.72.6"
+    "react-native": "0.72.6",
+    "zod": "^4.0.15"
   }
 }

@@ -1,29 +1,69 @@
+import { generateObject } from 'ai';
+import { openai } from '@ai-sdk/openai';
+import { anthropic } from '@ai-sdk/anthropic';
+import { z } from 'zod';
+import { AI_CONFIG, SYSTEM_PROMPT } from '../config/ai-config';
 
-interface ComponentSpec {
-  type: string;
-  props: Record<string, any>;
-}
+const ComponentSpecSchema = z.object({
+  type: z.string(),
+  props: z.record(z.string(), z.any()),
+});
 
-interface ScreenSpec {
-  name: string;
-  components: ComponentSpec[];
-}
+const ScreenSpecSchema = z.object({
+  name: z.string(),
+  components: z.array(ComponentSpecSchema),
+});
 
-interface AppSpec {
-  appName: string;
-  screens: ScreenSpec[];
-  dataCollection?: string;
-  enableDatabase?: boolean;
-}
+const AppSpecSchema = z.object({
+  appName: z.string(),
+  screens: z.array(ScreenSpecSchema),
+  dataCollection: z.string().optional(),
+  enableDatabase: z.boolean().optional(),
+});
+
+export type ComponentSpec = z.infer<typeof ComponentSpecSchema>;
+export type ScreenSpec = z.infer<typeof ScreenSpecSchema>;
+export type AppSpec = z.infer<typeof AppSpecSchema>;
 
 export class AIAppGenerator {
+  private provider: any;
+
+  constructor() {
+    if (AI_CONFIG.provider === 'anthropic') {
+      this.provider = anthropic(AI_CONFIG.model || 'claude-3-5-sonnet-20241022');
+    } else {
+      this.provider = openai(AI_CONFIG.model || 'gpt-4o-mini');
+    }
+  }
+
   async generateApp(userPrompt: string): Promise<AppSpec> {
-    // For PoC, we'll use simple keyword matching
-    // In production, this would call Claude/GPT API
-    
+    try {
+      // If no API key is configured, fall back to hardcoded logic
+      if (!AI_CONFIG.apiKey) {
+        console.warn('No AI API key configured, using fallback logic');
+        return this.generateFallbackApp(userPrompt);
+      }
+
+      // Use Vercel AI SDK to generate app specification
+      const { object } = await generateObject({
+        model: this.provider,
+        schema: AppSpecSchema,
+        system: SYSTEM_PROMPT,
+        prompt: userPrompt,
+        temperature: AI_CONFIG.temperature,
+      });
+
+      return object;
+    } catch (error) {
+      console.error('AI generation failed, using fallback:', error);
+      return this.generateFallbackApp(userPrompt);
+    }
+  }
+
+  // Fallback logic when AI API is not available
+  private generateFallbackApp(userPrompt: string): AppSpec {
     const prompt = userPrompt.toLowerCase();
     
-    // Simple keyword-based generation
     if (prompt.includes('todo') || prompt.includes('task')) {
       return this.generateTodoApp();
     } else if (prompt.includes('dashboard') || prompt.includes('analytics')) {
