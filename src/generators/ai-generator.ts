@@ -1,38 +1,518 @@
+import { generateObject } from 'ai';
+import { openai, createOpenAI } from '@ai-sdk/openai';
+import { anthropic, createAnthropic } from '@ai-sdk/anthropic';
+import { z } from 'zod';
+import { AI_CONFIG, SYSTEM_PROMPT } from '../config/ai-config';
+import { metricsCollector } from '../monitoring/metrics';
+import { logger, generateCorrelationId } from '../monitoring/logger';
+import { generationCache } from '../cache/generation-cache';
+import {
+  AIProviderError,
+  AIRateLimitError,
+  AIAuthenticationError,
+  AIQuotaExceededError,
+  AIModelUnavailableError,
+  AIGenerationTimeoutError,
+  AIInvalidResponseError,
+  ValidationError,
+  isRetryableError,
+  getRetryDelay,
+  sanitizeErrorForLogging
+} from '../errors/ai-errors';
+import { CircuitBreaker, CircuitBreakerError } from '../utils/circuit-breaker';
+import { Bulkhead, BulkheadRejectionError } from '../utils/bulkhead';
+import { getCircuitBreakerConfig, getBulkheadConfig, RESILIENCE_CONFIG } from '../config/resilience-config';
 
-interface ComponentSpec {
-  type: string;
-  props: Record<string, any>;
-}
+const ComponentSpecSchema = z.object({
+  type: z.string(),
+  props: z.record(z.string(), z.any()),
+});
 
-interface ScreenSpec {
-  name: string;
-  components: ComponentSpec[];
-}
+const ScreenSpecSchema = z.object({
+  name: z.string(),
+  components: z.array(ComponentSpecSchema),
+});
 
-interface AppSpec {
-  appName: string;
-  screens: ScreenSpec[];
-  dataCollection?: string;
-  enableDatabase?: boolean;
-}
+const AppSpecSchema = z.object({
+  appName: z.string(),
+  screens: z.array(ScreenSpecSchema),
+  dataCollection: z.string().optional(),
+  enableDatabase: z.boolean().optional(),
+});
+
+export type ComponentSpec = z.infer<typeof ComponentSpecSchema>;
+export type ScreenSpec = z.infer<typeof ScreenSpecSchema>;
+export type AppSpec = z.infer<typeof AppSpecSchema>;
 
 export class AIAppGenerator {
-  async generateApp(userPrompt: string): Promise<AppSpec> {
-    // For PoC, we'll use simple keyword matching
-    // In production, this would call Claude/GPT API
+  private provider: any;
+  private maxRetries: number = 3;
+  private timeoutMs: number; // Configurable timeout
+  private fallbackTimeoutMs: number; // Even shorter timeout for fallback operations
+  private retryTimeoutMs: number; // Shorter timeout for retry attempts
+  private circuitBreaker: CircuitBreaker | null = null;
+  private bulkhead: Bulkhead | null = null;
+
+  constructor() {
+    // Configure timeouts from environment variables with sensible defaults
+    this.timeoutMs = parseInt(process.env.AI_GENERATION_TIMEOUT || '10000'); // Default 10 seconds
+    this.fallbackTimeoutMs = parseInt(process.env.AI_FALLBACK_TIMEOUT || '5000'); // Default 5 seconds
+    this.retryTimeoutMs = parseInt(process.env.AI_RETRY_TIMEOUT || '7000'); // Default 7 seconds for retries
     
+    // Initialize circuit breaker if enabled
+    if (RESILIENCE_CONFIG.enableCircuitBreakers) {
+      const config = getCircuitBreakerConfig('AI_GENERATION');
+      this.circuitBreaker = new CircuitBreaker(config);
+      
+      logger.info('Circuit breaker initialized for AI generation', {
+        circuitBreaker: {
+          name: config.name,
+          config,
+          enabled: true,
+        },
+      });
+    } else {
+      logger.info('Circuit breaker disabled for AI generation', {
+        circuitBreaker: {
+          enabled: false,
+          reason: 'disabled_in_config',
+        },
+      });
+    }
+    
+    // Initialize bulkhead if enabled
+    if (RESILIENCE_CONFIG.enableBulkheads) {
+      const config = getBulkheadConfig('AI_GENERATION');
+      this.bulkhead = new Bulkhead(config);
+      
+      logger.info('Bulkhead initialized for AI generation', {
+        bulkhead: {
+          name: config.name,
+          config,
+          enabled: true,
+        },
+      });
+    } else {
+      logger.info('Bulkhead disabled for AI generation', {
+        bulkhead: {
+          enabled: false,
+          reason: 'disabled_in_config',
+        },
+      });
+    }
+    
+    if (AI_CONFIG.provider === 'anthropic') {
+      const anthropicProvider = AI_CONFIG.apiKey 
+        ? createAnthropic({ apiKey: AI_CONFIG.apiKey })
+        : anthropic;
+      this.provider = anthropicProvider(AI_CONFIG.model || 'claude-3-5-sonnet-20241022');
+    } else {
+      const openaiProvider = AI_CONFIG.apiKey 
+        ? createOpenAI({ apiKey: AI_CONFIG.apiKey })
+        : openai;
+      this.provider = openaiProvider(AI_CONFIG.model || 'gpt-4o-mini');
+    }
+
+    logger.info('AI App Generator initialized', {
+      generator: {
+        provider: AI_CONFIG.provider,
+        model: AI_CONFIG.model,
+        hasApiKey: Boolean(AI_CONFIG.apiKey),
+        maxRetries: this.maxRetries,
+        timeouts: {
+          generation: this.timeoutMs,
+          fallback: this.fallbackTimeoutMs,
+          retry: this.retryTimeoutMs,
+        },
+      },
+    });
+  }
+
+  async generateApp(userPrompt: string, correlationId?: string): Promise<AppSpec> {
+    const cId = correlationId || generateCorrelationId();
+    
+    // Validate input first (before any bulkhead protection)
+    if (!userPrompt || typeof userPrompt !== 'string') {
+      throw new ValidationError('Prompt must be a non-empty string', 'prompt', userPrompt, cId);
+    }
+
+    if (userPrompt.trim().length === 0) {
+      throw new ValidationError('Prompt cannot be empty', 'prompt', userPrompt, cId);
+    }
+
+    // Wrap entire generation process with bulkhead if available
+    if (this.bulkhead) {
+      return await this.bulkhead.execute(async () => {
+        return await this.executeGenerationProcess(userPrompt, cId);
+      }, cId);
+    }
+    
+    // Fallback to direct execution if bulkhead is disabled
+    return await this.executeGenerationProcess(userPrompt, cId);
+  }
+
+  // Execute the full generation process (separated for bulkhead wrapping)
+  private async executeGenerationProcess(userPrompt: string, correlationId: string): Promise<AppSpec> {
+    const startTime = Date.now();
+
+    logger.info('Starting app generation', {
+      generation: {
+        prompt: userPrompt.slice(0, 100), // Truncate for logging
+        provider: AI_CONFIG.provider,
+        model: AI_CONFIG.model,
+        hasApiKey: Boolean(AI_CONFIG.apiKey),
+      },
+    }, correlationId);
+
+    try {
+      // Check cache first
+      const cachedResult = this.getCachedResult(userPrompt, correlationId);
+      if (cachedResult) {
+        const responseTime = Date.now() - startTime;
+        this.recordSuccessMetrics(userPrompt, responseTime, true, false, correlationId);
+        return cachedResult;
+      }
+
+      // If no API key is configured, fall back to hardcoded logic
+      if (!AI_CONFIG.apiKey) {
+        logger.warn('No AI API key configured, using fallback logic', {
+          generation: { fallback: true, reason: 'no_api_key' },
+        }, correlationId);
+        
+        const result = await this.generateFallbackApp(userPrompt, correlationId);
+        const responseTime = Date.now() - startTime;
+        
+        // Cache fallback results too
+        this.cacheResult(userPrompt, result, responseTime, correlationId);
+        this.recordSuccessMetrics(userPrompt, responseTime, true, true, correlationId);
+        
+        return result;
+      }
+
+      // Attempt AI generation with retries
+      const result = await this.generateWithRetries(userPrompt, correlationId, startTime);
+      
+      // Cache successful result
+      this.cacheResult(userPrompt, result, Date.now() - startTime, correlationId);
+      
+      return result;
+    } catch (error) {
+      const responseTime = Date.now() - startTime;
+      
+      logger.error('App generation failed, attempting fallback', error as Error, {
+        generation: {
+          prompt: userPrompt.slice(0, 100),
+          responseTime,
+          attemptedFallback: true,
+        },
+      }, correlationId);
+
+      this.recordErrorMetrics(userPrompt, responseTime, error as Error, correlationId);
+
+      // Try fallback as last resort
+      try {
+        const fallbackResult = await this.generateFallbackApp(userPrompt, correlationId);
+        const fallbackResponseTime = Date.now() - startTime;
+        
+        this.recordSuccessMetrics(userPrompt, fallbackResponseTime, true, true, correlationId);
+        return fallbackResult;
+      } catch (fallbackError) {
+        logger.fatal('Both AI generation and fallback failed', fallbackError as Error, {
+          generation: { totalResponseTime: Date.now() - startTime },
+        }, correlationId);
+        
+        throw error; // Throw original error, not fallback error
+      }
+    }
+  }
+
+  // Helper methods for caching
+  private getCachedResult(prompt: string, correlationId: string): AppSpec | null {
+    try {
+      const cached = generationCache.get(prompt, AI_CONFIG.provider, AI_CONFIG.model || '', correlationId);
+      if (cached) {
+        logger.debug('Cache hit for prompt', {
+          cache: { hit: true, prompt: prompt.slice(0, 50) },
+        }, correlationId);
+      }
+      return cached;
+    } catch (error) {
+      logger.warn('Cache lookup failed', error as Error, {
+        cache: { operation: 'get', prompt: prompt.slice(0, 50) },
+      }, correlationId);
+      return null;
+    }
+  }
+
+  private cacheResult(prompt: string, result: AppSpec, generationTime: number, correlationId: string): void {
+    try {
+      generationCache.set(
+        prompt,
+        result,
+        AI_CONFIG.provider,
+        AI_CONFIG.model || '',
+        generationTime,
+        undefined, // Use default TTL
+        correlationId
+      );
+      logger.debug('Result cached', {
+        cache: { operation: 'set', generationTime },
+      }, correlationId);
+    } catch (error) {
+      logger.warn('Failed to cache result', error as Error, {
+        cache: { operation: 'set' },
+      }, correlationId);
+    }
+  }
+
+  // Helper methods for metrics
+  private recordSuccessMetrics(prompt: string, responseTime: number, success: boolean, fallbackUsed: boolean, correlationId: string): void {
+    metricsCollector.recordGeneration({
+      prompt,
+      success,
+      responseTime,
+      timestamp: Date.now(),
+      provider: AI_CONFIG.provider,
+      model: AI_CONFIG.model || '',
+      fallbackUsed,
+      correlationId,
+    });
+
+    logger.generation(prompt, success, AI_CONFIG.provider, AI_CONFIG.model || '', responseTime, fallbackUsed, undefined, correlationId);
+  }
+
+  private recordErrorMetrics(prompt: string, responseTime: number, error: Error, correlationId: string): void {
+    metricsCollector.recordGeneration({
+      prompt,
+      success: false,
+      responseTime,
+      timestamp: Date.now(),
+      provider: AI_CONFIG.provider,
+      model: AI_CONFIG.model || '',
+      fallbackUsed: false,
+      correlationId,
+      error: error.message,
+    });
+
+    logger.generation(prompt, false, AI_CONFIG.provider, AI_CONFIG.model || '', responseTime, false, undefined, correlationId, error);
+  }
+
+  // AI generation with retries
+  private async generateWithRetries(prompt: string, correlationId: string, startTime: number): Promise<AppSpec> {
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+      try {
+        logger.debug(`AI generation attempt ${attempt}/${this.maxRetries}`, {
+          generation: { attempt, prompt: prompt.slice(0, 50) },
+        }, correlationId);
+
+        // Use shorter timeout for retry attempts after the first
+        const timeout = attempt === 1 ? this.timeoutMs : this.retryTimeoutMs;
+        const result = await this.performAIGeneration(prompt, correlationId, timeout);
+        const responseTime = Date.now() - startTime;
+        
+        this.recordSuccessMetrics(prompt, responseTime, true, false, correlationId);
+        return result;
+      } catch (error) {
+        lastError = this.classifyAndTransformError(error as Error, correlationId);
+        
+        logger.warn(`AI generation attempt ${attempt} failed`, lastError, {
+          generation: {
+            attempt,
+            retriesRemaining: this.maxRetries - attempt,
+            retryable: isRetryableError(lastError),
+          },
+        }, correlationId);
+
+        // Don't retry if error is not retryable
+        if (!isRetryableError(lastError)) {
+          break;
+        }
+
+        // Don't retry on last attempt
+        if (attempt === this.maxRetries) {
+          break;
+        }
+
+        // Wait before retry
+        const delay = getRetryDelay(lastError, attempt);
+        if (delay > 0) {
+          logger.debug(`Waiting ${delay}ms before retry`, {
+            generation: { delay, attempt },
+          }, correlationId);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    }
+
+    throw lastError || new AIProviderError('AI generation failed after retries', AI_CONFIG.provider, AI_CONFIG.model || '', false, correlationId);
+  }
+
+  // Perform actual AI generation
+  private async performAIGeneration(prompt: string, correlationId: string, customTimeout?: number): Promise<AppSpec> {
+    const timeout = customTimeout || this.timeoutMs;
+    
+    // Wrap AI generation with circuit breaker if available
+    if (this.circuitBreaker) {
+      return await this.circuitBreaker.execute(async () => {
+        return await this.executeAIGeneration(prompt, correlationId, timeout);
+      }, correlationId);
+    }
+    
+    // Fallback to direct execution if circuit breaker is disabled
+    return await this.executeAIGeneration(prompt, correlationId, timeout);
+  }
+
+  // Execute actual AI generation (separated for circuit breaker wrapping)
+  private async executeAIGeneration(prompt: string, correlationId: string, timeout: number): Promise<AppSpec> {
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new AIGenerationTimeoutError(`AI generation timed out after ${timeout}ms`, timeout, correlationId));
+      }, timeout);
+    });
+
+    try {
+      const generationPromise = generateObject({
+        model: this.provider,
+        schema: AppSpecSchema,
+        system: SYSTEM_PROMPT,
+        prompt,
+        temperature: AI_CONFIG.temperature,
+      });
+
+      const { object, usage } = await Promise.race([generationPromise, timeoutPromise]);
+
+      if (!object) {
+        throw new AIInvalidResponseError('AI provider returned null response', AI_CONFIG.provider, 'null', correlationId);
+      }
+
+      // Log token usage if available
+      if (usage) {
+        logger.debug('AI generation completed', {
+          generation: {
+            tokenUsage: usage,
+            provider: AI_CONFIG.provider,
+            model: AI_CONFIG.model,
+          },
+        }, correlationId);
+
+        // Record token usage in metrics if available
+        metricsCollector.recordGeneration({
+          prompt,
+          success: true,
+          responseTime: Date.now(),
+          timestamp: Date.now(),
+          provider: AI_CONFIG.provider,
+          model: AI_CONFIG.model || '',
+          fallbackUsed: false,
+          tokenUsage: {
+            promptTokens: usage.promptTokens,
+            completionTokens: usage.completionTokens,
+          },
+          correlationId,
+        });
+      }
+
+      return object;
+    } catch (error) {
+      if (error instanceof AIGenerationTimeoutError) {
+        throw error;
+      }
+      throw this.classifyAndTransformError(error as Error, correlationId);
+    }
+  }
+
+  // Error classification and transformation
+  private classifyAndTransformError(error: Error, correlationId: string): Error {
+    // Circuit breaker and bulkhead errors should be passed through without transformation
+    if (error instanceof CircuitBreakerError || error instanceof BulkheadRejectionError) {
+      return error;
+    }
+
+    const errorMessage = error.message.toLowerCase();
+
+    // Rate limiting
+    if (errorMessage.includes('rate limit') || errorMessage.includes('too many requests')) {
+      return new AIRateLimitError(error.message, AI_CONFIG.provider, 'requests', undefined, correlationId);
+    }
+
+    // Authentication errors
+    if (errorMessage.includes('unauthorized') || errorMessage.includes('invalid api key') || errorMessage.includes('authentication')) {
+      return new AIAuthenticationError(error.message, AI_CONFIG.provider, correlationId);
+    }
+
+    // Quota exceeded
+    if (errorMessage.includes('quota') || errorMessage.includes('billing') || errorMessage.includes('insufficient credits')) {
+      return new AIQuotaExceededError(error.message, AI_CONFIG.provider, 'credits', undefined, correlationId);
+    }
+
+    // Model unavailable
+    if (errorMessage.includes('model') && (errorMessage.includes('unavailable') || errorMessage.includes('not found'))) {
+      return new AIModelUnavailableError(error.message, AI_CONFIG.provider, AI_CONFIG.model || '', correlationId);
+    }
+
+    // Network/connection errors
+    if (errorMessage.includes('network') || errorMessage.includes('connection') || errorMessage.includes('timeout')) {
+      return new AIProviderError(error.message, AI_CONFIG.provider, AI_CONFIG.model || '', true, correlationId, error);
+    }
+
+    // Default to provider error
+    return new AIProviderError(error.message, AI_CONFIG.provider, AI_CONFIG.model || '', true, correlationId, error);
+  }
+
+  // Fallback logic when AI API is not available
+  private async generateFallbackApp(userPrompt: string, correlationId?: string): Promise<AppSpec> {
+    const cId = correlationId || generateCorrelationId();
     const prompt = userPrompt.toLowerCase();
     
-    // Simple keyword-based generation
+    logger.info('Using fallback app generation', {
+      generation: { 
+        fallback: true, 
+        prompt: prompt.slice(0, 50),
+        timeout: this.fallbackTimeoutMs,
+      },
+    }, cId);
+
+    // Add timeout to fallback generation to ensure it doesn't hang
+    const fallbackPromise = this.generateFallbackAppSync(userPrompt, cId);
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new AIGenerationTimeoutError(`Fallback generation timed out after ${this.fallbackTimeoutMs}ms`, this.fallbackTimeoutMs, cId));
+      }, this.fallbackTimeoutMs);
+    });
+
+    const result = await Promise.race([fallbackPromise, timeoutPromise]);
+
+    logger.info('Fallback app generated', {
+      generation: {
+        appName: result.appName,
+        fallback: true,
+        screensCount: result.screens.length,
+        hasDatabase: result.enableDatabase,
+      },
+    }, cId);
+
+    return result;
+  }
+
+  // Synchronous fallback generation (separated for timeout handling)
+  private async generateFallbackAppSync(userPrompt: string, correlationId: string): Promise<AppSpec> {
+    const prompt = userPrompt.toLowerCase();
+    
+    let result: AppSpec;
+    
     if (prompt.includes('todo') || prompt.includes('task')) {
-      return this.generateTodoApp();
+      result = this.generateTodoApp();
     } else if (prompt.includes('dashboard') || prompt.includes('analytics')) {
-      return this.generateDashboardApp();
+      result = this.generateDashboardApp();
     } else if (prompt.includes('blog') || prompt.includes('article')) {
-      return this.generateBlogApp();
+      result = this.generateBlogApp();
     } else {
-      return this.generateDefaultApp(userPrompt);
+      result = this.generateDefaultApp(userPrompt);
     }
+
+    return result;
   }
 
   private generateTodoApp(): AppSpec {
@@ -168,5 +648,94 @@ export class AIAppGenerator {
         ]
       }]
     };
+  }
+
+  /**
+   * Get circuit breaker metrics for monitoring
+   */
+  getCircuitBreakerMetrics() {
+    if (!this.circuitBreaker) {
+      return null;
+    }
+
+    return {
+      ...this.circuitBreaker.getMetrics(),
+      failureRate: this.circuitBreaker.getCurrentFailureRate(),
+      healthy: this.circuitBreaker.isHealthy(),
+    };
+  }
+
+  /**
+   * Get circuit breaker status for health checks
+   */
+  isCircuitBreakerHealthy(): boolean {
+    return this.circuitBreaker ? this.circuitBreaker.isHealthy() : true;
+  }
+
+  /**
+   * Force circuit breaker state (for testing/maintenance)
+   */
+  forceCircuitBreakerState(state: any, reason?: string): void {
+    if (this.circuitBreaker) {
+      this.circuitBreaker.forceState(state, reason);
+    }
+  }
+
+  /**
+   * Get bulkhead metrics for monitoring
+   */
+  getBulkheadMetrics() {
+    if (!this.bulkhead) {
+      return null;
+    }
+
+    return {
+      ...this.bulkhead.getMetrics(),
+      utilization: this.bulkhead.getUtilization(),
+      healthy: this.bulkhead.isHealthy(),
+    };
+  }
+
+  /**
+   * Get bulkhead status for health checks
+   */
+  isBulkheadHealthy(): boolean {
+    return this.bulkhead ? this.bulkhead.isHealthy() : true;
+  }
+
+  /**
+   * Get combined resilience metrics
+   */
+  getResilienceMetrics() {
+    return {
+      circuitBreaker: this.getCircuitBreakerMetrics(),
+      bulkhead: this.getBulkheadMetrics(),
+      timestamp: Date.now(),
+      enabled: {
+        circuitBreaker: this.circuitBreaker !== null,
+        bulkhead: this.bulkhead !== null,
+      },
+    };
+  }
+
+  /**
+   * Check overall resilience health
+   */
+  isResilienceHealthy(): boolean {
+    const cbHealthy = this.isCircuitBreakerHealthy();
+    const bhHealthy = this.isBulkheadHealthy();
+    
+    return cbHealthy && bhHealthy;
+  }
+
+  /**
+   * Clear bulkhead queue (for emergency situations)
+   */
+  clearBulkheadQueue(reason?: string): number {
+    if (!this.bulkhead) {
+      return 0;
+    }
+    
+    return this.bulkhead.clearQueue(reason || 'manual_clear');
   }
 }
