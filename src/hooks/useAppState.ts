@@ -24,7 +24,7 @@ export function useAppState() {
     const response = await apiService.getApps();
     
     if (response.error) {
-      setState(prev => ({ ...prev, loading: false, error: response.error }));
+      setState(prev => ({ ...prev, loading: false, error: response.error || null }));
     } else {
       setState(prev => ({ ...prev, loading: false, apps: response.data }));
     }
@@ -36,7 +36,7 @@ export function useAppState() {
     const response = await apiService.createApp(name, spec);
     
     if (response.error) {
-      setState(prev => ({ ...prev, loading: false, error: response.error }));
+      setState(prev => ({ ...prev, loading: false, error: response.error || null }));
       return null;
     } else {
       setState(prev => ({ 
@@ -55,7 +55,7 @@ export function useAppState() {
     const response = await apiService.getData(collection);
     
     if (response.error) {
-      setState(prev => ({ ...prev, loading: false, error: response.error }));
+      setState(prev => ({ ...prev, loading: false, error: response.error || null }));
     } else {
       setState(prev => ({ 
         ...prev, 
@@ -71,7 +71,7 @@ export function useAppState() {
     const response = await apiService.createData(collection, data);
     
     if (response.error) {
-      setState(prev => ({ ...prev, loading: false, error: response.error }));
+      setState(prev => ({ ...prev, loading: false, error: response.error || null }));
       return null;
     } else {
       setState(prev => ({ 
@@ -92,7 +92,7 @@ export function useAppState() {
     const response = await apiService.updateData(collection, id, data);
     
     if (response.error) {
-      setState(prev => ({ ...prev, loading: false, error: response.error }));
+      setState(prev => ({ ...prev, loading: false, error: response.error || null }));
       return null;
     } else {
       setState(prev => ({ 
@@ -115,7 +115,7 @@ export function useAppState() {
     const response = await apiService.deleteData(collection, id);
     
     if (response.error) {
-      setState(prev => ({ ...prev, loading: false, error: response.error }));
+      setState(prev => ({ ...prev, loading: false, error: response.error || null }));
       return false;
     } else {
       setState(prev => ({ 

@@ -3,7 +3,6 @@ export const AI_CONFIG = {
   apiKey: process.env.AI_API_KEY || '',
   model: process.env.AI_MODEL || 'gpt-4o-mini', // or 'claude-3-5-sonnet-20241022'
   temperature: 0.7,
-  maxTokens: 2000,
 };
 
 export const SYSTEM_PROMPT = `You are an AI that generates React Native app specifications based on user prompts.

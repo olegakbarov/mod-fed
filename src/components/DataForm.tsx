@@ -36,10 +36,10 @@ export default function DataForm({
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const handleFieldChange = (name: string, value: string) => {
-    setFormData(prev => ({ ...prev, [name]: value }));
+    setFormData((prev: any) => ({ ...prev, [name]: value }));
     // Clear error for this field
     if (errors[name]) {
-      setErrors(prev => ({ ...prev, [name]: '' }));
+      setErrors((prev: Record<string, string>) => ({ ...prev, [name]: '' }));
     }
   };
 
@@ -92,8 +92,8 @@ export default function DataForm({
             <TextInput
               style={[
                 styles.input,
-                field.type === 'multiline' && styles.multilineInput,
-                errors[field.name] && styles.inputError,
+                field.type === 'multiline' ? styles.multilineInput : null,
+                errors[field.name] ? styles.inputError : null,
               ]}
               value={formData[field.name] || ''}
               onChangeText={(text) => handleFieldChange(field.name, text)}
