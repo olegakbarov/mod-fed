@@ -1,0 +1,274 @@
+{
+  "version": "2.0.0",
+  "components": {
+    "Header": {
+      "id": "header-basic",
+      "version": "1.0.0",
+      "url": "http://localhost:3001/Header.js",
+      "localPath": "./src/components/Header.tsx",
+      "props": {
+        "title": {
+          "type": "string",
+          "required": true
+        },
+        "showBack": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        }
+      },
+      "aiTags": ["navigation", "top", "header", "title"],
+      "category": "navigation",
+      "description": "Basic header with optional back button",
+      "dependencies": [],
+      "compatibility": {
+        "minReactNativeVersion": "0.70.0",
+        "platforms": ["ios", "android", "web"]
+      }
+    },
+    "Button": {
+      "id": "button-primary",
+      "version": "1.0.0",
+      "url": "http://localhost:3001/Button.js",
+      "localPath": "./src/components/Button.tsx",
+      "props": {
+        "label": {
+          "type": "string",
+          "required": true
+        },
+        "onPress": {
+          "type": "function",
+          "required": false
+        },
+        "disabled": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        }
+      },
+      "aiTags": ["action", "cta", "interactive", "button", "click"],
+      "category": "input",
+      "description": "Primary action button",
+      "dependencies": [],
+      "variants": {
+        "secondary": {
+          "id": "button-secondary",
+          "style": "outlined"
+        },
+        "danger": {
+          "id": "button-danger",
+          "style": "danger"
+        }
+      }
+    },
+    "List": {
+      "id": "list-simple",
+      "version": "1.0.0",
+      "url": "http://localhost:3001/List.js",
+      "localPath": "./src/components/List.tsx",
+      "props": {
+        "items": {
+          "type": "array",
+          "required": true
+        },
+        "title": {
+          "type": "string",
+          "required": false
+        },
+        "renderItem": {
+          "type": "function",
+          "required": false
+        }
+      },
+      "aiTags": ["display", "collection", "scrollable", "list", "items"],
+      "category": "display",
+      "description": "Simple list for displaying collections",
+      "dependencies": [],
+      "capabilities": ["scrolling", "data-display"]
+    },
+    "Card": {
+      "id": "card-basic",
+      "version": "1.0.0",
+      "url": "http://localhost:3001/Card.js",
+      "localPath": "./src/components/Card.tsx",
+      "props": {
+        "title": {
+          "type": "string",
+          "required": false
+        },
+        "content": {
+          "type": "string",
+          "required": false
+        },
+        "image": {
+          "type": "string",
+          "required": false
+        }
+      },
+      "aiTags": ["container", "content", "display", "card", "box"],
+      "category": "display",
+      "description": "Card container for content",
+      "dependencies": [],
+      "capabilities": ["content-display"]
+    },
+    "TextInput": {
+      "id": "input-basic",
+      "version": "1.0.0",
+      "url": "http://localhost:3001/TextInput.js",
+      "localPath": "./src/components/TextInput.tsx",
+      "props": {
+        "placeholder": {
+          "type": "string",
+          "required": false
+        },
+        "value": {
+          "type": "string",
+          "required": false
+        },
+        "onChangeText": {
+          "type": "function",
+          "required": false
+        },
+        "multiline": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        }
+      },
+      "aiTags": ["input", "form", "interactive", "text", "field", "entry"],
+      "category": "input",
+      "description": "Text input field",
+      "dependencies": [],
+      "capabilities": ["text-input"],
+      "variants": {
+        "password": {
+          "id": "input-password",
+          "secureTextEntry": true
+        },
+        "email": {
+          "id": "input-email",
+          "keyboardType": "email-address"
+        },
+        "numeric": {
+          "id": "input-numeric",
+          "keyboardType": "numeric"
+        }
+      }
+    },
+    "DataForm": {
+      "id": "data-form",
+      "version": "1.0.0",
+      "url": "http://localhost:3001/DataForm.js",
+      "localPath": "./src/components/DataForm.tsx",
+      "props": {
+        "collection": {
+          "type": "string",
+          "required": true
+        },
+        "fields": {
+          "type": "array",
+          "required": true
+        },
+        "submitLabel": {
+          "type": "string",
+          "required": false,
+          "default": "Submit"
+        },
+        "onSubmit": {
+          "type": "function",
+          "required": false
+        },
+        "enableValidation": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        }
+      },
+      "aiTags": ["form", "data", "input", "collection", "submit", "crud"],
+      "category": "data",
+      "description": "Dynamic form for data collection",
+      "dependencies": ["TextInput", "Button"],
+      "capabilities": ["data-collection", "validation"],
+      "requiresDatabase": true
+    },
+    "DataList": {
+      "id": "data-list",
+      "version": "1.0.0",
+      "url": "http://localhost:3001/DataList.js",
+      "localPath": "./src/components/DataList.tsx",
+      "props": {
+        "collection": {
+          "type": "string",
+          "required": true
+        },
+        "onDelete": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        },
+        "onEdit": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        },
+        "sortBy": {
+          "type": "string",
+          "required": false
+        },
+        "sortOrder": {
+          "type": "string",
+          "required": false,
+          "default": "asc"
+        },
+        "refreshTrigger": {
+          "type": "number",
+          "required": false
+        }
+      },
+      "aiTags": ["list", "data", "display", "crud", "collection"],
+      "category": "data",
+      "description": "Dynamic list connected to data source",
+      "dependencies": ["List"],
+      "capabilities": ["data-display", "crud-operations"],
+      "requiresDatabase": true
+    }
+  },
+  "templates": {
+    "todo": {
+      "id": "todo-template",
+      "name": "Todo App",
+      "version": "1.0.0",
+      "components": ["Header", "DataForm", "DataList"],
+      "requiredComponents": ["Header", "DataForm", "DataList"],
+      "optionalComponents": ["Button"],
+      "layout": "vertical",
+      "requiresDatabase": true
+    },
+    "dashboard": {
+      "id": "dashboard-template",
+      "name": "Dashboard",
+      "version": "1.0.0",
+      "components": ["Header", "Card", "List"],
+      "requiredComponents": ["Header"],
+      "optionalComponents": ["Card", "List", "Button"],
+      "layout": "grid",
+      "requiresDatabase": false
+    },
+    "blog": {
+      "id": "blog-template",
+      "name": "Blog App",
+      "version": "1.0.0",
+      "components": ["Header", "DataForm", "DataList", "Card"],
+      "requiredComponents": ["Header", "DataForm", "DataList"],
+      "optionalComponents": ["Card", "Button"],
+      "layout": "vertical",
+      "requiresDatabase": true
+    }
+  },
+  "metadata": {
+    "lastUpdated": "2024-01-01T00:00:00Z",
+    "author": "AI App Generator",
+    "registryVersion": "2.0.0",
+    "compatibilityVersion": "1.0.0"
+  }
+}

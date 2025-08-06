@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
-import { AIAppGenerator } from './src/generators/ai-generator';
+import { DynamicAIAppGenerator } from './src/generators/ai-generator-dynamic';
 import { apiService } from './src/services/api';
 import componentRegistry from './src/registry/components-registry.json';
 
@@ -62,7 +62,7 @@ function App(): JSX.Element {
       setPrompt('Create a todo list app');
       setTimeout(() => {
         const demoGenerate = async () => {
-          const generator = new AIAppGenerator();
+          const generator = new DynamicAIAppGenerator();
           const appSpec = await generator.generateApp('Create a todo list app');
           
           if (appSpec.enableDatabase) {
@@ -94,7 +94,7 @@ function App(): JSX.Element {
     setLoading(true);
     try {
       // Step 1: Generate app specification using AI
-      const generator = new AIAppGenerator();
+      const generator = new DynamicAIAppGenerator();
       const appSpec = await generator.generateApp(prompt);
       
       console.log('Generated App Spec:', appSpec);
