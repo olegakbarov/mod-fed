@@ -59,8 +59,12 @@ export class MetricsCollector {
   private cacheMetrics: CacheMetric[] = [];
   private systemMetrics: SystemMetric[] = [];
   
-  private readonly maxMetricsHistory = 10000;
-  private readonly metricsRetentionMs = 24 * 60 * 60 * 1000; // 24 hours
+  private readonly maxMetricsHistory = 1000; // Reduced from 10000 to prevent memory leaks
+  private readonly maxRequestMetrics = 1000; // Circular buffer limit
+  private readonly maxGenerationMetrics = 1000; // Circular buffer limit
+  private readonly maxCacheMetrics = 1000; // Circular buffer limit
+  private readonly maxSystemMetrics = 100; // System metrics need fewer entries
+  private readonly metricsRetentionMs = 60 * 60 * 1000; // Reduced from 24 hours to 1 hour
 
   constructor() {
     // Start periodic cleanup
@@ -73,12 +77,22 @@ export class MetricsCollector {
   // Generic metric recording
   recordMetric(metric: MetricEvent): void {
     this.metrics.push(metric);
-    this.cleanup();
+    
+    // Implement circular buffer for general metrics
+    if (this.metrics.length > this.maxMetricsHistory) {
+      this.metrics = this.metrics.slice(-this.maxMetricsHistory);
+    }
   }
 
   // Request-specific metrics
   recordRequest(metric: RequestMetric): void {
     this.requestMetrics.push(metric);
+    
+    // Implement circular buffer for request metrics
+    if (this.requestMetrics.length > this.maxRequestMetrics) {
+      this.requestMetrics = this.requestMetrics.slice(-this.maxRequestMetrics);
+    }
+    
     this.recordMetric({
       name: 'http_request_duration',
       value: metric.responseTime,
@@ -91,12 +105,17 @@ export class MetricsCollector {
       correlationId: metric.correlationId,
     });
     
-    this.cleanup();
+    this.cleanupIfNeeded();
   }
 
   // AI generation metrics
   recordGeneration(metric: GenerationMetric): void {
     this.generationMetrics.push(metric);
+    
+    // Implement circular buffer for generation metrics
+    if (this.generationMetrics.length > this.maxGenerationMetrics) {
+      this.generationMetrics = this.generationMetrics.slice(-this.maxGenerationMetrics);
+    }
     
     this.recordMetric({
       name: 'ai_generation_duration',
@@ -125,12 +144,17 @@ export class MetricsCollector {
       });
     }
 
-    this.cleanup();
+    this.cleanupIfNeeded();
   }
 
   // Cache metrics
   recordCache(metric: CacheMetric): void {
     this.cacheMetrics.push(metric);
+    
+    // Implement circular buffer for cache metrics
+    if (this.cacheMetrics.length > this.maxCacheMetrics) {
+      this.cacheMetrics = this.cacheMetrics.slice(-this.maxCacheMetrics);
+    }
     
     this.recordMetric({
       name: 'cache_operation',
@@ -142,12 +166,17 @@ export class MetricsCollector {
       correlationId: metric.correlationId,
     });
 
-    this.cleanup();
+    this.cleanupIfNeeded();
   }
 
   // System metrics
   recordSystem(metric: SystemMetric): void {
     this.systemMetrics.push(metric);
+    
+    // Implement circular buffer for system metrics (smaller buffer)
+    if (this.systemMetrics.length > this.maxSystemMetrics) {
+      this.systemMetrics = this.systemMetrics.slice(-this.maxSystemMetrics);
+    }
     
     if (metric.cpuUsage !== undefined) {
       this.recordMetric({
@@ -349,26 +378,34 @@ export class MetricsCollector {
     };
   }
 
-  private cleanup(): void {
+  // Optimized cleanup that only runs periodically to avoid performance impact
+  private cleanupIfNeeded(): void {
+    // Only run full cleanup every 100 operations to reduce performance impact
+    if (Math.random() < 0.01) { // 1% chance per operation
+      this.performTimeBasedCleanup();
+    }
+  }
+
+  private performTimeBasedCleanup(): void {
     const cutoff = Date.now() - this.metricsRetentionMs;
 
-    // Clean up general metrics
-    if (this.metrics.length > this.maxMetricsHistory) {
-      this.metrics = this.metrics.slice(-this.maxMetricsHistory);
-    }
+    // Clean up by timestamp (in addition to circular buffer limits)
     this.metrics = this.metrics.filter(m => m.timestamp >= cutoff);
-
-    // Clean up specific metric types
     this.requestMetrics = this.requestMetrics.filter(m => m.timestamp >= cutoff);
     this.generationMetrics = this.generationMetrics.filter(m => m.timestamp >= cutoff);
     this.cacheMetrics = this.cacheMetrics.filter(m => m.timestamp >= cutoff);
     this.systemMetrics = this.systemMetrics.filter(m => m.timestamp >= cutoff);
   }
 
+  private cleanup(): void {
+    // Legacy method - just call the new method for compatibility
+    this.performTimeBasedCleanup();
+  }
+
   private startCleanup(): void {
     // Run cleanup every 5 minutes
     setInterval(() => {
-      this.cleanup();
+      this.performTimeBasedCleanup();
     }, 5 * 60 * 1000);
   }
 

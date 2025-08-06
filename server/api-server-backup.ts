@@ -35,140 +35,125 @@ try {
   process.exit(1); // Exit in production if security config fails
 }
 
-// Initialize database connection pool and run migrations
-let connectionPool: any;
+// Initialize SQLite database with error handling
+let db: Database;
+try {
+  db = new Database(dbPath, { create: true });
+  logger.info('Database initialized', {
+    database: { path: dbPath, type: 'sqlite' },
+  });
 
-async function initializeDatabase() {
-  try {
-    // Initialize connection pool
-    connectionPool = initializeConnectionPool(dbPath, {
-      minConnections: 2,
-      maxConnections: 10,
-      connectionTimeout: 5000,
-      idleTimeout: 300000, // 5 minutes
-      healthCheckInterval: 60000, // 1 minute
-      maxConnectionAge: 3600000, // 1 hour
-      maxQueriesPerConnection: 1000,
-    });
+  // Create tables with error handling
+  const createTables = [
+    {
+      name: 'apps',
+      sql: `
+        CREATE TABLE IF NOT EXISTS apps (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          spec TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `,
+    },
+    {
+      name: 'app_data',
+      sql: `
+        CREATE TABLE IF NOT EXISTS app_data (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          app_id INTEGER NOT NULL,
+          entity_type TEXT NOT NULL,
+          data TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (app_id) REFERENCES apps(id) ON DELETE CASCADE
+        )
+      `,
+    },
+    {
+      name: 'dynamic_data',
+      sql: `
+        CREATE TABLE IF NOT EXISTS dynamic_data (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          collection TEXT NOT NULL,
+          data TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `,
+    },
+  ];
 
-    logger.info('Database connection pool initialized', {
-      database: { path: dbPath, type: 'sqlite', pooling: 'enabled' },
-    });
-
-    // Run database migrations
-    await runMigrations();
-    
-    // Verify database is up to date
-    const isUpToDate = await isDatabaseUpToDate();
-    if (!isUpToDate) {
-      logger.warn('Database schema may not be up to date after migrations');
-    } else {
-      logger.info('Database schema is up to date');
+  for (const table of createTables) {
+    try {
+      db.run(table.sql);
+      logger.debug(`Table ${table.name} created/verified`, {
+        database: { table: table.name, operation: 'create_table' },
+      });
+    } catch (error) {
+      logger.error(`Failed to create table ${table.name}`, error as Error, {
+        database: { table: table.name, operation: 'create_table' },
+      });
+      throw new DatabaseError(`Failed to create table ${table.name}`, 'create_table', table.name, false);
     }
+  }
 
-    // Create base tables if they don't exist (fallback for migration issues)
-    await withTransaction(async (db) => {
-      // Create tables with error handling
-      const createTables = [
-        {
-          name: 'apps',
-          sql: `
-            CREATE TABLE IF NOT EXISTS apps (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              name TEXT NOT NULL,
-              spec TEXT NOT NULL,
-              created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-              updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-          `,
-        },
-        {
-          name: 'app_data',
-          sql: `
-            CREATE TABLE IF NOT EXISTS app_data (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              app_id INTEGER NOT NULL,
-              entity_type TEXT NOT NULL,
-              data TEXT NOT NULL,
-              created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-              updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-              FOREIGN KEY (app_id) REFERENCES apps(id) ON DELETE CASCADE
-            )
-          `,
-        },
-        {
-          name: 'dynamic_data',
-          sql: `
-            CREATE TABLE IF NOT EXISTS dynamic_data (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              collection TEXT NOT NULL,
-              data TEXT NOT NULL,
-              user_id TEXT NULL,
-              created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-              updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-          `,
-        },
-      ];
+  logger.info('Database schema initialized successfully');
+} catch (error) {
+  logger.fatal('Failed to initialize database', error as Error, {
+    database: { path: dbPath, operation: 'initialization' },
+  });
+  process.exit(1);
+}
 
-      for (const table of createTables) {
+// Async database helper functions to avoid blocking the event loop
+const asyncDb = {
+  // Async wrapper for db.query().all()
+  queryAll: (query: string, params?: any[]): Promise<any[]> => {
+    return new Promise((resolve, reject) => {
+      setImmediate(() => {
         try {
-          db.run(table.sql);
-          logger.debug(`Table ${table.name} created/verified`, {
-            database: { table: table.name, operation: 'create_table' },
-          });
+          const stmt = db.prepare(query);
+          const result = params ? stmt.all(...params) : stmt.all();
+          resolve(result as any[]);
         } catch (error) {
-          logger.error(`Failed to create table ${table.name}`, error as Error, {
-            database: { table: table.name, operation: 'create_table' },
-          });
-          throw new DatabaseError(`Failed to create table ${table.name}`, 'create_table', table.name, false);
+          reject(error);
         }
-      }
+      });
     });
+  },
 
-    logger.info('Database schema initialized successfully');
-  } catch (error) {
-    logger.fatal('Failed to initialize database', error as Error, {
-      database: { path: dbPath, operation: 'initialization' },
+  // Async wrapper for db.query().get()
+  queryGet: (query: string, params?: any[]): Promise<any> => {
+    return new Promise((resolve, reject) => {
+      setImmediate(() => {
+        try {
+          const stmt = db.prepare(query);
+          const result = params ? stmt.get(...params) : stmt.get();
+          resolve(result);
+        } catch (error) {
+          reject(error);
+        }
+      });
     });
-    process.exit(1);
-  }
-}
+  },
 
-// Helper function to get authenticated user ID from request
-function getAuthenticatedUserId(req: Request): string | null {
-  const authResult = (req as any).authResult;
-  if (!authResult?.isAuthenticated || !authResult.keyInfo) {
-    return null;
-  }
-  
-  // Use the API key as user ID (in a real app, you'd have proper user IDs)
-  // For this demo, we'll use a hash of the API key to create a stable user ID
-  const apiKey = authResult.apiKey;
-  if (!apiKey) return null;
-  
-  // Simple hash function to create a user ID from API key
-  let hash = 0;
-  for (let i = 0; i < apiKey.length; i++) {
-    const char = apiKey.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32-bit integer
-  }
-  
-  return `user_${Math.abs(hash).toString(36)}`;
-}
-
-// Helper function to require authentication for an endpoint
-function requireAuthentication(req: Request): { isAuthenticated: boolean; userId: string | null; authResult: any } {
-  const authResult = (req as any).authResult;
-  const userId = getAuthenticatedUserId(req);
-  
-  return {
-    isAuthenticated: authResult?.isAuthenticated || false,
-    userId,
-    authResult,
-  };
-}
+  // Async wrapper for db.run()
+  run: (query: string, params?: any[]): Promise<any> => {
+    return new Promise((resolve, reject) => {
+      setImmediate(() => {
+        try {
+          const stmt = db.prepare(query);
+          const result = params ? stmt.run(...params) : stmt.run();
+          resolve(result);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+  },
+};
 
 // Enhanced CORS and security headers
 const createSecureHeaders = (origin?: string | null) => {
@@ -197,9 +182,9 @@ async function applySecurityMiddleware(req: Request, path: string, method: strin
   const origin = req.headers.get('origin');
   const headers = createSecureHeaders(origin);
   
-  // Apply rate limiting (now async)
+  // Apply rate limiting
   const authResult = authMiddleware.authenticate(req);
-  const rateLimitResult = await rateLimiter.checkLimit(clientIP, authResult.isAuthenticated);
+  const rateLimitResult = rateLimiter.checkLimit(clientIP, authResult.isAuthenticated);
   
   // Add rate limit headers to response
   Object.assign(headers, rateLimitResult.headers);
@@ -279,9 +264,6 @@ async function parseAndValidateBody(req: Request, endpoint?: 'generate' | 'data'
   
   return { success: true, data: validation.sanitizedData };
 }
-
-// Initialize database before starting server
-await initializeDatabase();
 
 serve({
   port: PORT,
@@ -429,7 +411,7 @@ serve({
         const headers = (req as any).secureHeaders;
         
         if (method === "GET") {
-          const apps = await connectionPool.query<any[]>("SELECT * FROM apps ORDER BY created_at DESC", [], 'all');
+          const apps = await asyncDb.queryAll("SELECT * FROM apps ORDER BY created_at DESC");
           return Response.json(apps, { headers });
         }
         
@@ -444,13 +426,10 @@ serve({
             return createValidationErrorResponse(['Missing name or spec'], headers);
           }
           
-          const result = await withTransaction(async (db) => {
-            const insertResult = db.run("INSERT INTO apps (name, spec) VALUES (?, ?)", [body.name, JSON.stringify(body.spec)]);
-            const newApp = db.prepare("SELECT * FROM apps WHERE id = ?").get(insertResult.lastInsertRowid);
-            return newApp;
-          });
+          const result = await asyncDb.run("INSERT INTO apps (name, spec) VALUES (?, ?)", [body.name, JSON.stringify(body.spec)]);
           
-          return Response.json(result, { headers });
+          const newApp = await asyncDb.queryGet("SELECT * FROM apps WHERE id = ?", [result.lastInsertRowid]);
+          return Response.json(newApp, { headers });
         }
       }
 
@@ -461,7 +440,7 @@ serve({
         const headers = (req as any).secureHeaders;
         
         if (method === "GET") {
-          const app = await connectionPool.query<any>("SELECT * FROM apps WHERE id = ?", [appId], 'get');
+          const app = await asyncDb.queryGet("SELECT * FROM apps WHERE id = ?", [appId]);
           if (!app) {
             return createSecureErrorResponse(secureErrorMessages.NOT_FOUND, 404, 'NOT_FOUND', headers);
           }
@@ -469,40 +448,23 @@ serve({
         }
         
         if (method === "DELETE") {
-          await withTransaction(async (db) => {
-            db.run("DELETE FROM apps WHERE id = ?", [appId]);
-          });
+          await asyncDb.run("DELETE FROM apps WHERE id = ?", [appId]);
           return Response.json({ success: true }, { headers });
         }
       }
 
-      // Dynamic data endpoints (for generated apps to use) - NOW WITH AUTHENTICATION
+      // Dynamic data endpoints (for generated apps to use)  
       else if (path.startsWith("/api/data/")) {
         const collection = path.replace("/api/data/", "").split('/')[0];
         const headers = (req as any).secureHeaders;
         
-        // REQUIRE AUTHENTICATION for all data endpoints
-        const auth = requireAuthentication(req);
-        if (!auth.isAuthenticated || !auth.userId) {
-          return createUnauthorizedResponse('Authentication required for data access', headers);
-        }
-        
-        const userId = auth.userId;
-        
         if (method === "GET") {
-          // Filter by user_id to ensure users only see their own data
-          const items = await connectionPool.query<any[]>(
-            "SELECT * FROM dynamic_data WHERE collection = ? AND (user_id = ? OR user_id IS NULL) ORDER BY created_at DESC", 
-            [collection, userId], 
-            'all'
-          );
-          
+          const items = await asyncDb.queryAll("SELECT * FROM dynamic_data WHERE collection = ? ORDER BY created_at DESC", [collection]);
           return Response.json(items.map((item: any) => ({ 
             id: item.id, 
             ...JSON.parse(item.data as string),
             created_at: item.created_at,
-            updated_at: item.updated_at,
-            user_id: item.user_id
+            updated_at: item.updated_at
           })), { headers });
         }
         
@@ -517,22 +479,14 @@ serve({
             return createValidationErrorResponse(['Request body cannot be empty'], headers);
           }
           
-          // Insert with user_id for data isolation
-          const newItem = await withTransaction(async (db) => {
-            const insertResult = db.run(
-              "INSERT INTO dynamic_data (collection, data, user_id) VALUES (?, ?, ?)", 
-              [collection, JSON.stringify(body), userId]
-            );
-            
-            return db.prepare("SELECT * FROM dynamic_data WHERE id = ?").get(insertResult.lastInsertRowid);
-          });
+          const result = await asyncDb.run("INSERT INTO dynamic_data (collection, data) VALUES (?, ?)", [collection, JSON.stringify(body)]);
           
+          const newItem = await asyncDb.queryGet("SELECT * FROM dynamic_data WHERE id = ?", [result.lastInsertRowid]);
           return Response.json({ 
             id: newItem.id, 
             ...JSON.parse(newItem.data as string),
             created_at: newItem.created_at,
-            updated_at: newItem.updated_at,
-            user_id: newItem.user_id
+            updated_at: newItem.updated_at
           }, { headers });
         }
       }
@@ -544,32 +498,16 @@ serve({
         const id = parseInt(itemId);
         const headers = (req as any).secureHeaders;
         
-        // REQUIRE AUTHENTICATION for single item operations
-        const auth = requireAuthentication(req);
-        if (!auth.isAuthenticated || !auth.userId) {
-          return createUnauthorizedResponse('Authentication required for data access', headers);
-        }
-        
-        const userId = auth.userId;
-        
         if (method === "GET") {
-          // Ensure user can only access their own data
-          const item = await connectionPool.query<any>(
-            "SELECT * FROM dynamic_data WHERE collection = ? AND id = ? AND (user_id = ? OR user_id IS NULL)", 
-            [collection, id, userId], 
-            'get'
-          );
-          
+          const item = await asyncDb.queryGet("SELECT * FROM dynamic_data WHERE collection = ? AND id = ?", [collection, id]);
           if (!item) {
             return createSecureErrorResponse(secureErrorMessages.NOT_FOUND, 404, 'NOT_FOUND', headers);
           }
-          
           return Response.json({ 
             id: item.id, 
             ...JSON.parse(item.data as string),
             created_at: item.created_at,
-            updated_at: item.updated_at,
-            user_id: item.user_id
+            updated_at: item.updated_at
           }, { headers });
         }
         
@@ -584,28 +522,12 @@ serve({
             return createValidationErrorResponse(['Request body cannot be empty'], headers);
           }
           
-          // Update only items owned by the authenticated user
-          const updatedItem = await withTransaction(async (db) => {
-            const updateResult = db.run(
-              "UPDATE dynamic_data SET data = ?, updated_at = CURRENT_TIMESTAMP WHERE collection = ? AND id = ? AND user_id = ?",
-              [JSON.stringify(body), collection, id, userId]
-            );
-            
-            if (updateResult.changes === 0) {
-              // Check if item exists but belongs to different user
-              const existingItem = db.prepare(
-                "SELECT id FROM dynamic_data WHERE collection = ? AND id = ?"
-              ).get(collection, id);
-              
-              if (existingItem) {
-                throw new DatabaseError('Access denied - item belongs to different user', 'unauthorized_access', collection, false);
-              }
-              return null;
-            }
-            
-            return db.prepare("SELECT * FROM dynamic_data WHERE collection = ? AND id = ?").get(collection, id);
-          });
+          await asyncDb.run(
+            "UPDATE dynamic_data SET data = ?, updated_at = CURRENT_TIMESTAMP WHERE collection = ? AND id = ?",
+            [JSON.stringify(body), collection, id]
+          );
           
+          const updatedItem = await asyncDb.queryGet("SELECT * FROM dynamic_data WHERE collection = ? AND id = ?", [collection, id]);
           if (!updatedItem) {
             return createSecureErrorResponse(secureErrorMessages.NOT_FOUND, 404, 'NOT_FOUND', headers);
           }
@@ -614,24 +536,15 @@ serve({
             id: updatedItem.id, 
             ...JSON.parse(updatedItem.data as string),
             created_at: updatedItem.created_at,
-            updated_at: updatedItem.updated_at,
-            user_id: updatedItem.user_id
+            updated_at: updatedItem.updated_at
           }, { headers });
         }
         
         if (method === "DELETE") {
-          // Delete only items owned by the authenticated user
-          const result = await withTransaction(async (db) => {
-            return db.run(
-              "DELETE FROM dynamic_data WHERE collection = ? AND id = ? AND user_id = ?", 
-              [collection, id, userId]
-            );
-          });
-          
+          const result = await asyncDb.run("DELETE FROM dynamic_data WHERE collection = ? AND id = ?", [collection, id]);
           if (result.changes === 0) {
             return createSecureErrorResponse(secureErrorMessages.NOT_FOUND, 404, 'NOT_FOUND', headers);
           }
-          
           return Response.json({ success: true }, { headers });
         }
       }
@@ -639,33 +552,10 @@ serve({
       // Stats endpoint  
       else if (path === "/api/stats") {
         const headers = (req as any).secureHeaders;
-        
-        // Get authenticated user for scoped stats
-        const auth = requireAuthentication(req);
-        let appCount, dataCount, collections;
-        
-        if (auth.isAuthenticated && auth.userId) {
-          // Scoped stats for authenticated user
-          appCount = await connectionPool.query<any>("SELECT COUNT(*) as count FROM apps", [], 'get');
-          dataCount = await connectionPool.query<any>(
-            "SELECT COUNT(*) as count FROM dynamic_data WHERE user_id = ? OR user_id IS NULL", 
-            [auth.userId], 
-            'get'
-          );
-          collections = await connectionPool.query<any[]>(
-            "SELECT DISTINCT collection FROM dynamic_data WHERE user_id = ? OR user_id IS NULL", 
-            [auth.userId], 
-            'all'
-          );
-        } else {
-          // Global stats for unauthenticated requests
-          appCount = await connectionPool.query<any>("SELECT COUNT(*) as count FROM apps", [], 'get');
-          dataCount = await connectionPool.query<any>("SELECT COUNT(*) as count FROM dynamic_data", [], 'get');
-          collections = await connectionPool.query<any[]>("SELECT DISTINCT collection FROM dynamic_data", [], 'all');
-        }
-        
+        const appCount = await asyncDb.queryGet("SELECT COUNT(*) as count FROM apps");
+        const dataCount = await asyncDb.queryGet("SELECT COUNT(*) as count FROM dynamic_data");
+        const collections = await asyncDb.queryAll("SELECT DISTINCT collection FROM dynamic_data");
         const rateLimitStats = rateLimiter.getStats();
-        const poolStats = connectionPool.getStats();
         
         return Response.json({
           apps: appCount.count,
@@ -674,11 +564,6 @@ serve({
           security: {
             rateLimitStats,
             timestamp: new Date().toISOString(),
-          },
-          database: {
-            poolStats,
-            isAuthenticated: auth.isAuthenticated,
-            userId: auth.userId,
           },
         }, { headers });
       }
@@ -712,17 +597,14 @@ serve({
               // Save generated app to database with error handling
               try {
                 const dbStartTime = Date.now();
-                
-                const newApp = await withTransaction(async (db) => {
-                  const insertResult = db.run("INSERT INTO apps (name, spec) VALUES (?, ?)", [appSpec.appName, JSON.stringify(appSpec)]);
-                  return db.prepare("SELECT * FROM apps WHERE id = ?").get(insertResult.lastInsertRowid);
-                });
-                
+                const result = await asyncDb.run("INSERT INTO apps (name, spec) VALUES (?, ?)", [appSpec.appName, JSON.stringify(appSpec)]);
                 const dbTime = Date.now() - dbStartTime;
                 
                 logger.database('INSERT', 'apps', dbTime, true, {
                   database: { appName: appSpec.appName },
                 }, correlationId);
+                
+                const newApp = await asyncDb.queryGet("SELECT * FROM apps WHERE id = ?", [result.lastInsertRowid]);
                 
                 // Include user tier info in response if authenticated
                 const responseData: any = { 
@@ -873,12 +755,12 @@ if (process.env.NODE_ENV !== 'production') {
     { method: 'GET', path: '/api/apps/:id', description: 'Get specific app' },
     { method: 'DELETE', path: '/api/apps/:id', description: 'Delete specific app' },
     
-    // Data endpoints (NOW REQUIRE AUTHENTICATION)
-    { method: 'GET', path: '/api/data/:collection', description: 'Get collection data (authenticated)' },
-    { method: 'POST', path: '/api/data/:collection', description: 'Add data to collection (authenticated)' },
-    { method: 'GET', path: '/api/data/:collection/:id', description: 'Get specific data item (authenticated)' },
-    { method: 'PUT', path: '/api/data/:collection/:id', description: 'Update specific data item (authenticated)' },
-    { method: 'DELETE', path: '/api/data/:collection/:id', description: 'Delete specific data item (authenticated)' },
+    // Data endpoints
+    { method: 'GET', path: '/api/data/:collection', description: 'Get collection data' },
+    { method: 'POST', path: '/api/data/:collection', description: 'Add data to collection' },
+    { method: 'GET', path: '/api/data/:collection/:id', description: 'Get specific data item' },
+    { method: 'PUT', path: '/api/data/:collection/:id', description: 'Update specific data item' },
+    { method: 'DELETE', path: '/api/data/:collection/:id', description: 'Delete specific data item' },
     
     // Stats and monitoring endpoints
     { method: 'GET', path: '/api/stats', description: 'Application statistics' },
@@ -891,14 +773,12 @@ if (process.env.NODE_ENV !== 'production') {
     { method: 'GET', path: '/health/quick', description: 'Quick health check for load balancers' },
   ];
   
-  console.log(`\n🚀 AI App Generator API Server (ENHANCED WITH SECURITY)`);
+  console.log(`\n🚀 AI App Generator API Server`);
   console.log(`📍 Running at: http://localhost:${PORT}`);
-  console.log(`🔒 Authentication required for all /api/data/* endpoints`);
-  console.log(`📋 Available Endpoints:`);
+  console.log(`\n📋 Available Endpoints:`);
   
   endpoints.forEach(({ method, path, description }) => {
-    const security = path.includes('/api/data/') ? '🔐' : '';
-    console.log(`  ${method.padEnd(6)} http://localhost:${PORT}${path.padEnd(35)} - ${description} ${security}`);
+    console.log(`  ${method.padEnd(6)} http://localhost:${PORT}${path.padEnd(35)} - ${description}`);
   });
   
   console.log(`\n🔧 Development Tools:`);
@@ -906,13 +786,6 @@ if (process.env.NODE_ENV !== 'production') {
   console.log(`  Metrics:          curl http://localhost:${PORT}/api/metrics`);
   console.log(`  Cache Stats:      curl http://localhost:${PORT}/api/cache/stats`);
   console.log(`  Generate App:     curl -X POST http://localhost:${PORT}/api/generate -H "Content-Type: application/json" -d '{"prompt":"Create a todo app"}'`);
-  console.log(`  Secure Data:      curl -X GET http://localhost:${PORT}/api/data/todos -H "Authorization: Bearer YOUR_API_KEY"`);
-  console.log(`\n🔒 Security Features:`);
-  console.log(`  - Database connection pooling with health checks`);
-  console.log(`  - Transaction management with ACID compliance`);
-  console.log(`  - User-scoped data access control`);
-  console.log(`  - Atomic rate limiting operations`);
-  console.log(`  - Database schema migrations`);
   console.log(`\n💡 View logs in structured format by setting LOG_LEVEL=0 for debug mode\n`);
 }
 
@@ -923,10 +796,10 @@ const gracefulShutdown = async (signal: string) => {
   });
   
   try {
-    // Shutdown connection pool
-    if (connectionPool) {
-      await shutdownConnectionPool();
-      logger.info('Database connection pool shutdown');
+    // Close database connection
+    if (db) {
+      db.close();
+      logger.info('Database connection closed');
     }
     
     // Destroy cache

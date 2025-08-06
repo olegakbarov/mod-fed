@@ -30,10 +30,12 @@ export interface SystemHealth {
 export class HealthChecker {
   private startTime: number;
   private checks: Map<string, () => Promise<HealthCheckResult>>;
+  private memoryHistory: Array<{ timestamp: number; heapUsed: number; rss: number }>;
 
   constructor() {
     this.startTime = Date.now();
     this.checks = new Map();
+    this.memoryHistory = [];
     this.registerDefaultChecks();
   }
 
@@ -335,7 +337,7 @@ export class HealthChecker {
       }
     });
 
-    // Memory usage check
+    // Enhanced memory usage check with pressure detection
     this.registerCheck('memory', async (): Promise<HealthCheckResult> => {
       const startTime = Date.now();
       
@@ -343,14 +345,44 @@ export class HealthChecker {
         const usage = process.memoryUsage();
         const heapUsedMB = usage.heapUsed / 1024 / 1024;
         const heapTotalMB = usage.heapTotal / 1024 / 1024;
+        const rssMB = usage.rss / 1024 / 1024;
+        const externalMB = usage.external / 1024 / 1024;
         const utilization = (usage.heapUsed / usage.heapTotal) * 100;
 
         let status: 'healthy' | 'degraded' | 'unhealthy' = 'healthy';
-        if (heapUsedMB > 512) { // 512MB threshold
+        let warnings: string[] = [];
+        
+        // More granular thresholds for better monitoring
+        if (heapUsedMB > 256) { // 256MB threshold
           status = 'degraded';
+          warnings.push('High heap memory usage detected');
         }
-        if (heapUsedMB > 1024) { // 1GB threshold
+        if (heapUsedMB > 512) { // 512MB threshold
           status = 'unhealthy';
+          warnings.push('Critical heap memory usage - consider increasing memory or optimizing');
+        }
+        if (rssMB > 1024) { // 1GB RSS threshold
+          status = 'unhealthy';
+          warnings.push('High RSS memory usage - potential memory leak');
+        }
+        if (utilization > 90) {
+          status = 'unhealthy';
+          warnings.push('High memory utilization - approaching heap limit');
+        }
+
+        // Trigger garbage collection if memory is critically high
+        if (heapUsedMB > 512 && global.gc) {
+          try {
+            global.gc();
+            logger.warn('Manual garbage collection triggered due to high memory usage', {
+              memory: { heapUsedMB, trigger: 'health_check' },
+            });
+            warnings.push('Automatic GC triggered');
+          } catch (error) {
+            warnings.push('Failed to trigger automatic GC');
+          }
+        } else if (heapUsedMB > 512 && !global.gc) {
+          warnings.push('High memory usage detected but manual GC not available. Start with --expose-gc flag.');
         }
 
         return {
@@ -361,8 +393,14 @@ export class HealthChecker {
             heapUsed: `${heapUsedMB.toFixed(2)}MB`,
             heapTotal: `${heapTotalMB.toFixed(2)}MB`,
             utilization: `${utilization.toFixed(1)}%`,
-            rss: `${(usage.rss / 1024 / 1024).toFixed(2)}MB`,
-            external: `${(usage.external / 1024 / 1024).toFixed(2)}MB`,
+            rss: `${rssMB.toFixed(2)}MB`,
+            external: `${externalMB.toFixed(2)}MB`,
+            arrayBuffers: `${(usage.arrayBuffers / 1024 / 1024).toFixed(2)}MB`,
+            warnings: warnings,
+            thresholds: {
+              degraded: '256MB heap',
+              unhealthy: '512MB heap or 1GB RSS',
+            },
           },
         };
       } catch (error) {
@@ -371,6 +409,86 @@ export class HealthChecker {
           status: 'unhealthy',
           responseTime: Date.now() - startTime,
           error: error instanceof Error ? error.message : 'Memory check failed',
+        };
+      }
+    });
+
+    // Memory pressure monitoring with trend analysis
+    this.registerCheck('memory_pressure', async (): Promise<HealthCheckResult> => {
+      const startTime = Date.now();
+      
+      try {
+        const usage = process.memoryUsage();
+        const heapUsedMB = usage.heapUsed / 1024 / 1024;
+        const rssMB = usage.rss / 1024 / 1024;
+        
+        // Store recent memory readings for trend analysis
+        const now = Date.now();
+        this.memoryHistory.push({ timestamp: now, heapUsed: heapUsedMB, rss: rssMB });
+        
+        // Keep only last 10 readings (last 5 minutes if checked every 30 seconds)
+        if (this.memoryHistory.length > 10) {
+          this.memoryHistory = this.memoryHistory.slice(-10);
+        }
+        
+        let status: 'healthy' | 'degraded' | 'unhealthy' = 'healthy';
+        const warnings: string[] = [];
+        
+        // Analyze memory trends if we have enough data
+        if (this.memoryHistory.length >= 3) {
+          const recent = this.memoryHistory.slice(-3);
+          const isIncreasing = recent.every((reading, idx) => 
+            idx === 0 || reading.heapUsed > recent[idx - 1].heapUsed
+          );
+          const growthRate = recent.length > 1 ? 
+            (recent[recent.length - 1].heapUsed - recent[0].heapUsed) / (recent.length - 1) : 0;
+          
+          if (isIncreasing && growthRate > 10) { // Growing by more than 10MB per check
+            status = 'degraded';
+            warnings.push(`Memory usage increasing rapidly: +${growthRate.toFixed(1)}MB per check`);
+          }
+          
+          // Check if memory is consistently high
+          const avgMemory = recent.reduce((sum, r) => sum + r.heapUsed, 0) / recent.length;
+          if (avgMemory > 400) { // Average above 400MB
+            status = 'degraded';
+            warnings.push(`Consistently high memory usage: ${avgMemory.toFixed(1)}MB average`);
+          }
+        }
+        
+        // Critical thresholds
+        if (heapUsedMB > 600) {
+          status = 'unhealthy';
+          warnings.push('Critical memory usage detected');
+          
+          // Trigger emergency cleanup
+          if (global.gc) {
+            global.gc();
+            logger.error('Emergency garbage collection triggered', {
+              memory: { heapUsedMB, rssMB, trigger: 'memory_pressure' },
+            });
+          }
+        }
+        
+        return {
+          name: 'memory_pressure',
+          status,
+          responseTime: Date.now() - startTime,
+          details: {
+            currentHeapUsed: `${heapUsedMB.toFixed(2)}MB`,
+            currentRSS: `${rssMB.toFixed(2)}MB`,
+            trendAnalysis: this.memoryHistory.length >= 3 ? 'enabled' : 'insufficient_data',
+            dataPoints: this.memoryHistory.length,
+            warnings: warnings,
+            lastGC: global.gc ? 'available' : 'not_available',
+          },
+        };
+      } catch (error) {
+        return {
+          name: 'memory_pressure',
+          status: 'unhealthy',
+          responseTime: Date.now() - startTime,
+          error: error instanceof Error ? error.message : 'Memory pressure check failed',
         };
       }
     });

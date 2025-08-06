@@ -1,4 +1,5 @@
 import { defaultSecurityConfig, type ApiKeyInfo, secureErrorMessages } from '../config/security-config';
+import { secretsManager } from '../config/secrets';
 
 export interface AuthResult {
   isAuthenticated: boolean;
@@ -8,7 +9,62 @@ export interface AuthResult {
 }
 
 export class AuthMiddleware {
-  constructor(private config = defaultSecurityConfig.auth) {}
+  constructor(private config = defaultSecurityConfig.auth) {
+    // Load API keys from environment variables on initialization
+    this.loadApiKeysFromEnvironment();
+  }
+  
+  /**
+   * Load API keys from environment variables and secrets manager
+   */
+  private loadApiKeysFromEnvironment(): void {
+    try {
+      const secrets = secretsManager.getSecrets();
+      
+      // Load API keys from secrets configuration
+      if (secrets.apiKeys.custom) {
+        Object.entries(secrets.apiKeys.custom).forEach(([name, key]) => {
+          if (key && key.trim()) {
+            const keyInfo: ApiKeyInfo = {
+              name: `Custom API Key: ${name}`,
+              tier: 'basic', // Default tier, could be configured
+              createdAt: new Date(),
+              isActive: true,
+            };
+            this.config.apiKeys.set(key, keyInfo);
+          }
+        });
+      }
+      
+      // For development, you might want to allow specific environment variables
+      // for demo keys (but not in production)
+      if (process.env.NODE_ENV === 'development') {
+        const demoBasicKey = process.env.DEMO_BASIC_API_KEY;
+        const demoPremiumKey = process.env.DEMO_PREMIUM_API_KEY;
+        
+        if (demoBasicKey?.trim()) {
+          this.config.apiKeys.set(demoBasicKey, {
+            name: 'Demo Basic Key',
+            tier: 'basic',
+            createdAt: new Date(),
+            isActive: true,
+          });
+        }
+        
+        if (demoPremiumKey?.trim()) {
+          this.config.apiKeys.set(demoPremiumKey, {
+            name: 'Demo Premium Key',
+            tier: 'premium',
+            createdAt: new Date(),
+            isActive: true,
+          });
+        }
+      }
+    } catch (error) {
+      console.warn('Failed to load API keys from environment:', error);
+      // Continue with empty key set - keys can be added dynamically
+    }
+  }
 
   /**
    * Authenticate a request using API key
@@ -129,26 +185,30 @@ export class AuthMiddleware {
   }
 
   /**
-   * Generate a secure API key
+   * Generate a cryptographically secure API key
+   * Always uses secure random generation - no fallbacks to weak randomness
    */
   private generateApiKey(): string {
-    // Generate a cryptographically secure random string
+    // Check if crypto.getRandomValues is available
+    if (typeof crypto === 'undefined' || !crypto.getRandomValues) {
+      throw new Error(
+        'Cryptographically secure random number generation is not available. ' +
+        'This environment does not support crypto.getRandomValues. ' +
+        'Cannot generate secure API keys.'
+      );
+    }
+
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
     const keyLength = 32;
     let result = '';
     
-    // Use crypto.getRandomValues if available, fallback to Math.random for PoC
-    if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-      const array = new Uint8Array(keyLength);
-      crypto.getRandomValues(array);
-      for (let i = 0; i < keyLength; i++) {
-        result += chars[array[i] % chars.length];
-      }
-    } else {
-      // Fallback for environments without crypto.getRandomValues
-      for (let i = 0; i < keyLength; i++) {
-        result += chars[Math.floor(Math.random() * chars.length)];
-      }
+    // Generate cryptographically secure random bytes
+    const array = new Uint8Array(keyLength);
+    crypto.getRandomValues(array);
+    
+    // Convert to character string
+    for (let i = 0; i < keyLength; i++) {
+      result += chars[array[i] % chars.length];
     }
     
     return `ak_${result}`;

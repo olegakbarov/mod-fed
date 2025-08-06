@@ -36,21 +36,24 @@ export class GenerationCache {
   private config: CacheConfig;
   private cleanupInterval: NodeJS.Timeout;
   private currentSize: number = 0; // Size in bytes
+  private memoryPressureThreshold: number = 0.8; // 80% utilization triggers aggressive cleanup
+  private lastMemoryPressureCheck: number = 0;
 
   constructor(config: Partial<CacheConfig> = {}) {
     this.config = {
-      maxSize: 50 * 1024 * 1024, // 50MB default
-      defaultTTL: 60 * 60 * 1000, // 1 hour default
-      maxEntries: 1000,
+      maxSize: 10 * 1024 * 1024, // Reduced to 10MB default to prevent memory explosion
+      defaultTTL: 30 * 60 * 1000, // Reduced to 30 minutes default
+      maxEntries: 500, // Reduced from 1000 to 500 entries
       enableMetrics: true,
       enableCompression: false, // Could implement with zlib if needed
       ...config,
     };
 
-    // Start cleanup interval every 5 minutes
+    // Start cleanup interval every 2 minutes (more frequent)
     this.cleanupInterval = setInterval(() => {
       this.cleanup();
-    }, 5 * 60 * 1000);
+      this.checkMemoryPressure();
+    }, 2 * 60 * 1000);
 
     logger.info('Generation cache initialized', {
       cache: {
@@ -187,6 +190,9 @@ export class GenerationCache {
     if (this.needsEviction(entrySize)) {
       this.evictEntries(entrySize);
     }
+    
+    // Check for memory pressure and trigger more aggressive cleanup if needed
+    this.checkMemoryPressureIfNeeded();
 
     const cacheEntry: CacheEntry<GenerationCacheEntry> = {
       value: generationEntry,
@@ -290,9 +296,11 @@ export class GenerationCache {
 
   // Check if eviction is needed
   private needsEviction(newEntrySize: number): boolean {
+    const utilization = (this.currentSize + newEntrySize) / this.config.maxSize;
     return (
-      this.currentSize + newEntrySize > this.config.maxSize ||
-      this.cache.size >= this.config.maxEntries
+      utilization > 1.0 ||
+      this.cache.size >= this.config.maxEntries ||
+      utilization > this.memoryPressureThreshold // Early eviction under memory pressure
     );
   }
 
@@ -471,6 +479,94 @@ export class GenerationCache {
     };
   }
 
+  // Check memory pressure periodically (not on every operation for performance)
+  private checkMemoryPressureIfNeeded(): void {
+    const now = Date.now();
+    // Only check memory pressure every 30 seconds to reduce performance impact
+    if (now - this.lastMemoryPressureCheck > 30 * 1000) {
+      this.checkMemoryPressure();
+      this.lastMemoryPressureCheck = now;
+    }
+  }
+
+  // Check memory pressure and trigger garbage collection if needed
+  private checkMemoryPressure(): void {
+    const systemMemory = process.memoryUsage();
+    const heapUsedMB = systemMemory.heapUsed / 1024 / 1024;
+    const cacheUtilization = this.currentSize / this.config.maxSize;
+    
+    // If system memory is high or cache utilization is above threshold
+    if (heapUsedMB > 256 || cacheUtilization > this.memoryPressureThreshold) {
+      logger.warn('Memory pressure detected, triggering aggressive cache cleanup', {
+        cache: {
+          heapUsedMB: heapUsedMB.toFixed(2),
+          cacheUtilization: (cacheUtilization * 100).toFixed(1),
+          entries: this.cache.size,
+          cacheSizeMB: (this.currentSize / 1024 / 1024).toFixed(2),
+        },
+      });
+      
+      // More aggressive eviction - remove 30% of entries
+      this.performAggressiveEviction();
+      
+      // Suggest garbage collection if system memory is very high
+      if (heapUsedMB > 512) {
+        if (global.gc) {
+          global.gc();
+          logger.debug('Manual garbage collection triggered due to memory pressure');
+        } else {
+          logger.warn('High memory usage detected but manual GC not available. Start with --expose-gc flag for better memory management.');
+        }
+      }
+    }
+  }
+
+  // More aggressive eviction during memory pressure
+  private performAggressiveEviction(): void {
+    const targetReduction = Math.max(
+      this.cache.size * 0.3, // Remove 30% of entries
+      this.cache.size - (this.config.maxEntries * 0.7) // Or reduce to 70% of max entries
+    );
+    
+    const entries = Array.from(this.cache.entries());
+    
+    // Sort by last accessed time and access count (remove least used first)
+    entries.sort((a, b) => {
+      const timeDiff = a[1].lastAccessed - b[1].lastAccessed;
+      if (timeDiff !== 0) return timeDiff;
+      return a[1].accessCount - b[1].accessCount;
+    });
+    
+    let evictedCount = 0;
+    let freedSpace = 0;
+    
+    for (const [key, entry] of entries) {
+      if (evictedCount >= targetReduction) break;
+      
+      this.cache.delete(key);
+      this.currentSize -= entry.size;
+      freedSpace += entry.size;
+      evictedCount++;
+      
+      if (this.config.enableMetrics) {
+        metricsCollector.recordCache({
+          key,
+          operation: 'evict',
+          timestamp: Date.now(),
+        });
+      }
+    }
+    
+    logger.info('Aggressive cache eviction completed', {
+      cache: {
+        evictedCount,
+        freedSpaceMB: (freedSpace / 1024 / 1024).toFixed(2),
+        remainingEntries: this.cache.size,
+        currentSizeMB: (this.currentSize / 1024 / 1024).toFixed(2),
+      },
+    });
+  }
+
   // Health check
   isHealthy(): boolean {
     try {
@@ -503,8 +599,8 @@ export class GenerationCache {
 
 // Global cache instance
 export const generationCache = new GenerationCache({
-  maxSize: parseInt(process.env.CACHE_MAX_SIZE || '50') * 1024 * 1024, // Default 50MB
-  defaultTTL: parseInt(process.env.CACHE_TTL || '3600') * 1000, // Default 1 hour
-  maxEntries: parseInt(process.env.CACHE_MAX_ENTRIES || '1000'), // Default 1000 entries
+  maxSize: parseInt(process.env.CACHE_MAX_SIZE || '10') * 1024 * 1024, // Default reduced to 10MB
+  defaultTTL: parseInt(process.env.CACHE_TTL || '1800') * 1000, // Default reduced to 30 minutes
+  maxEntries: parseInt(process.env.CACHE_MAX_ENTRIES || '500'), // Default reduced to 500 entries
   enableMetrics: process.env.NODE_ENV !== 'test',
 });
